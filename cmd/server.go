@@ -1,5 +1,9 @@
 package cmd
 
+import (
+	"github.com/gorilla/websocket"
+)
+
 // ServerInterface provides methods for interactions web server
 type ServerInterface interface {
 	Start() error
@@ -24,4 +28,18 @@ type AuthServiceInterface interface {
 
 	// Shutdown gracefully shutdown FileStorage
 	Shutdown() error
+}
+
+// SessionStorageInterface provides methods for auth users
+type WebSocketSessionStorageInterface interface {
+	AddSession(s *WebSocketSession)
+
+	Broadcast(msg []byte)
+
+	Shutdown() error
+}
+
+type WebSocketSession struct {
+	Conn       *websocket.Conn
+	RemoteAddr string
 }

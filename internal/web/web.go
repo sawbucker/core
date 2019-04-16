@@ -8,12 +8,14 @@ import (
 
 	clog "github.com/ShoshinNikita/log/v2"
 	"github.com/gorilla/mux"
+	"github.com/gorilla/websocket"
 	jsoniter "github.com/json-iterator/go"
 
 	"github.com/tags-drive/core/cmd"
 	"github.com/tags-drive/core/internal/params"
 	"github.com/tags-drive/core/internal/web/auth"
 	"github.com/tags-drive/core/internal/web/limiter"
+	"github.com/tags-drive/core/internal/web/sessions"
 )
 
 const (
@@ -24,13 +26,15 @@ const (
 var json = jsoniter.ConfigCompatibleWithStandardLibrary
 
 type Server struct {
-	fileStorage cmd.FileStorageInterface
-	tagStorage  cmd.TagStorageInterface
-	authService cmd.AuthServiceInterface
+	fileStorage    cmd.FileStorageInterface
+	tagStorage     cmd.TagStorageInterface
+	authService    cmd.AuthServiceInterface
+	sessionStorage cmd.WebSocketSessionStorageInterface
 
 	logger *clog.Logger
 
 	httpServer *http.Server
+	wsUpgrader websocket.Upgrader
 
 	authRateLimiter *limiter.RateLimiter
 }
@@ -52,12 +56,25 @@ func NewWebServer(fs cmd.FileStorageInterface, ts cmd.TagStorageInterface, lg *c
 
 	var err error
 
+	// Add auth service
 	s.authService, err = auth.NewAuthService(lg)
 	if err != nil {
 		return nil, err
 	}
 
+	// Add Rate Limiter service
 	s.authRateLimiter = limiter.NewRateLimiter(authMaxRequests, authLimiterTimeout)
+
+	// Add WebSocket sessions storage
+	s.wsUpgrader = websocket.Upgrader{
+		ReadBufferSize:  1024,
+		WriteBufferSize: 1024,
+	}
+	if params.Debug {
+		s.wsUpgrader.CheckOrigin = func(r *http.Request) bool { return true }
+	}
+
+	s.sessionStorage = sessions.NewSessionsStorage(s.logger)
 
 	return s, nil
 }
@@ -79,6 +96,8 @@ func (s *Server) Start() error {
 	// For exitensions
 	exitensionsHandler := http.StripPrefix("/ext/", s.extensionHandler(http.Dir("./web/static/ext/48px/")))
 	router.PathPrefix("/ext/").Handler(cacheMiddleware(exitensionsHandler, 60*60*24*180)) // cache for 180 days
+
+	router.PathPrefix("/ws").HandlerFunc(s.serveWebSocket)
 
 	// Add usual routes
 	s.addDefaultRoutes(router)
@@ -123,6 +142,11 @@ func (s Server) Shutdown() error {
 	// Shutdown auth service
 	if err := s.authService.Shutdown(); err != nil {
 		s.logger.Warnf("can't shutdown authService gracefully: %s\n", err)
+	}
+
+	// Shutdown WS storage
+	if err := s.sessionStorage.Shutdown(); err != nil {
+		s.logger.Warnf("can't shutdown sessionStorage gracefully: %s\n", err)
 	}
 
 	return serverErr

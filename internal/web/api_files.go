@@ -283,10 +283,6 @@ func (s Server) upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	responses := make([]multiplyResponse, 0, len(r.MultipartForm.File["files"]))
-	responsesReady := make(chan struct{})
-	responsesChan := make(chan multiplyResponse, 50)
-
 	headersChan := make(chan interface{}, 5)
 	// Fill headersChan
 	go func() {
@@ -294,14 +290,6 @@ func (s Server) upload(w http.ResponseWriter, r *http.Request) {
 			headersChan <- r.MultipartForm.File["files"][i]
 		}
 		close(headersChan)
-	}()
-
-	// Fill responsesChan
-	go func() {
-		for r := range responsesChan {
-			responses = append(responses, r)
-		}
-		close(responsesReady)
 	}()
 
 	runPool(5, headersChan, func(data <-chan interface{}) {
@@ -324,19 +312,10 @@ func (s Server) upload(w http.ResponseWriter, r *http.Request) {
 				resp = multiplyResponse{Filename: header.Filename, Status: "uploaded"}
 			}
 
-			responsesChan <- resp
+			data, _ := json.Marshal(resp)
+			s.sessionStorage.Broadcast(data)
 		}
 	})
-	close(responsesChan)
-
-	<-responsesReady
-
-	w.Header().Set("Content-Type", "application/json")
-	enc := json.NewEncoder(w)
-	if params.Debug {
-		enc.SetIndent("", "  ")
-	}
-	enc.Encode(responses)
 }
 
 // POST /api/files/recover
@@ -598,10 +577,6 @@ func (s Server) deleteFile(w http.ResponseWriter, r *http.Request) {
 		return r.FormValue("force") != ""
 	}()
 
-	responses := make([]multiplyResponse, 0, len(ids))
-	responsesChan := make(chan multiplyResponse, 50)
-	responsesReady := make(chan struct{})
-
 	filesIDsChan := make(chan interface{}, 5)
 	// Fill filesIDsChan
 	go func() {
@@ -609,14 +584,6 @@ func (s Server) deleteFile(w http.ResponseWriter, r *http.Request) {
 			filesIDsChan <- id
 		}
 		close(filesIDsChan)
-	}()
-
-	// Fill responsesChan
-	go func() {
-		for r := range responsesChan {
-			responses = append(responses, r)
-		}
-		close(responsesReady)
 	}()
 
 	// Used in a worker function
@@ -638,6 +605,8 @@ func (s Server) deleteFile(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
+			var resp multiplyResponse
+
 			// Check file
 			file, err := s.fileStorage.GetFile(id)
 			if err != nil {
@@ -646,45 +615,31 @@ func (s Server) deleteFile(w http.ResponseWriter, r *http.Request) {
 					msg = fmt.Sprintf("file with id \"%d\" doesn't exist", id)
 				}
 
-				responsesChan <- multiplyResponse{
+				resp = multiplyResponse{
 					Filename: "",
 					IsError:  true,
 					Error:    msg,
 				}
-
-				// We can skip non-existent file
-				continue
-			}
-
-			var resp multiplyResponse
-
-			// Delete file
-			err = deleteFunc(id)
-			if err != nil {
-				resp = multiplyResponse{
-					Filename: file.Filename,
-					IsError:  true,
-					Error:    err.Error(),
-				}
 			} else {
-				// Use pre-defined var status
-				resp = multiplyResponse{
-					Filename: file.Filename,
-					Status:   respStatus,
+				// Delete file
+				err = deleteFunc(id)
+				if err != nil {
+					resp = multiplyResponse{
+						Filename: file.Filename,
+						IsError:  true,
+						Error:    err.Error(),
+					}
+				} else {
+					// Use pre-defined var status
+					resp = multiplyResponse{
+						Filename: file.Filename,
+						Status:   respStatus,
+					}
 				}
 			}
 
-			responsesChan <- resp
+			data, _ := json.Marshal(resp)
+			s.sessionStorage.Broadcast(data)
 		}
 	})
-	close(responsesChan)
-
-	<-responsesReady
-
-	w.Header().Set("Content-Type", "application/json")
-	enc := json.NewEncoder(w)
-	if params.Debug {
-		enc.SetIndent("", "  ")
-	}
-	enc.Encode(responses)
 }

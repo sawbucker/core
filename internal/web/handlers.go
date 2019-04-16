@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/tags-drive/core/cmd"
 	"github.com/tags-drive/core/internal/params"
 )
 
@@ -177,6 +178,20 @@ func setDebugHeaders(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+}
+
+// serveWebSocket tries to upgrade connection and add new session to SessionStorage
+func (s *Server) serveWebSocket(w http.ResponseWriter, r *http.Request) {
+	conn, err := s.wsUpgrader.Upgrade(w, r, nil)
+	if err != nil {
+		s.logger.Errorf("can't upgrade to WS connection: %s", err)
+		return
+	}
+
+	s.sessionStorage.AddSession(&cmd.WebSocketSession{
+		Conn:       conn,
+		RemoteAddr: r.RemoteAddr,
+	})
 }
 
 func mock(w http.ResponseWriter, r *http.Request) {
